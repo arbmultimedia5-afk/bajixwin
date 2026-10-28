@@ -249,6 +249,9 @@ $admin_logo_clean_src = get_admin_logo_src($admin_logo_path);
         <a href="game_api_key.php" class="flex items-center px-6 py-3 text-[#dbece3] hover:bg-[#1f4234] hover:text-white transition <?php echo $current_page == 'game_api_key.php' ? 'bg-[#1f4234] text-white border-l-4 border-[#ffdf1b]' : ''; ?>">
             <span class="mr-3 w-5 text-center">🔑</span> <span class="text-sm font-medium">Game API Key</span>
         </a>
+        <a href="gamblly_diagnostics.php" class="flex items-center px-6 py-3 text-[#dbece3] hover:bg-[#1f4234] hover:text-white transition <?php echo $current_page == 'gamblly_diagnostics.php' ? 'bg-[#1f4234] text-white border-l-4 border-[#ffdf1b]' : ''; ?>">
+            <span class="mr-3 w-5 text-center">🩺</span> <span class="text-sm font-medium">Gamblly Diagnostics</span>
+        </a>
         <a href="fetch_jili_games.php" class="flex items-center px-6 py-3 text-[#dbece3] hover:bg-[#1f4234] hover:text-white transition <?php echo $current_page == 'fetch_jili_games.php' ? 'bg-[#1f4234] text-white border-l-4 border-[#ffdf1b]' : ''; ?>">
             <span class="mr-3 w-5 text-center">🔄</span> <span class="text-sm font-medium">Sync JILI Games</span>
         </a>

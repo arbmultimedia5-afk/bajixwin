@@ -96,12 +96,20 @@ if (!function_exists('gamblly_api_member_account')) {
 
 if (!function_exists('gamblly_api_extract_player_id')) {
     function gamblly_api_extract_player_id($rawValue, $config) {
-        // member_account is sent as the plain user id, so player_uid comes back as-is.
+        // member_account is sent as the plain user id. Accept it as-is, or with this
+        // account's own prefix/suffix removed; never guess digits out of an unknown format.
         $raw = trim((string)$rawValue);
         if ($raw === '') { return 0; }
         if (ctype_digit($raw)) { return (int)$raw; }
-        if (preg_match('/([0-9]+)$/', $raw, $m)) { return (int)$m[1]; }
-        return 0;
+        $candidate = $raw;
+        $prefix = isset($config['member_prefix']) ? (string)$config['member_prefix'] : '';
+        $suffix = isset($config['member_suffix']) ? (string)$config['member_suffix'] : '';
+        if ($prefix !== '' && stripos($candidate, $prefix) === 0) { $candidate = substr($candidate, strlen($prefix)); }
+        if ($suffix !== '' && strlen($candidate) > strlen($suffix) && strcasecmp(substr($candidate, -strlen($suffix)), $suffix) === 0) {
+            $candidate = substr($candidate, 0, -strlen($suffix));
+        }
+        $candidate = trim($candidate, '_-');
+        return ctype_digit($candidate) ? (int)$candidate : 0;
     }
 }
 
