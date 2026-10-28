@@ -428,14 +428,26 @@ if (!function_exists('gamblly_api_callback_respond')) {
     // Sends the JSON reply first, then runs non-critical work (history, logging)
     // so the provider gets its answer as fast as possible.
     function gamblly_api_callback_respond($payload, $httpCode, $log, $afterResponse = null) {
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $hasFinish = function_exists('fastcgi_finish_request') || function_exists('litespeed_finish_request');
         if (!headers_sent()) {
             http_response_code($httpCode);
             header('Content-Type: application/json; charset=utf-8');
             header('Cache-Control: no-store');
+            if (!$hasFinish) {
+                // mod_php (Apache/Docker): a fixed length + close lets the client finish reading now.
+                header('Content-Length: ' . strlen($body));
+                header('Connection: close');
+            }
         }
-        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        echo $body;
+        ignore_user_abort(true);
         if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
         elseif (function_exists('litespeed_finish_request')) { @litespeed_finish_request(); }
+        else {
+            while (ob_get_level() > 0) { @ob_end_flush(); }
+            @flush();
+        }
 
         if (is_callable($afterResponse)) {
             try { call_user_func($afterResponse); }
