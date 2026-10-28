@@ -376,8 +376,8 @@ if (!function_exists('gamblly_api_response')) {
 
 if (!function_exists('gamblly_api_amount_scale')) {
     // One explicit precision rule for provider, wallet and database.
-    // users.balance is DECIMAL(10,2) (BDT), so the default scale is 2. Raise the
-    // gamblly_amount_scale setting only after widening users.balance as well.
+    // gamblly_auto_setup widens users.balance to DECIMAL(18,6) and only then sets
+    // gamblly_amount_scale=6; until that has happened the scale stays at 2.
     function gamblly_api_amount_scale($settings) {
         $scale = (int)gamblly_api_get_setting_value($settings, 'gamblly_amount_scale', '2');
         return ($scale < 0 || $scale > 6) ? 2 : $scale;
@@ -656,38 +656,42 @@ if (!function_exists('gamblly_api_handle_callback')) {
         // Wallet is committed. Bet history / turnover run after the reply is sent.
         $currency = (string)gamblly_api_pick($data, 'currency_code', $config['currency']);
         $afterResponse = function () use ($conn, $userId, $gameUid, $gameRound, $txnId, $bet, $win, $action, $balanceUnits, $newBalanceUnits, $scale, $currency) {
-            if (!function_exists('game_api_insert_bet_history')) { return; }
-            $row = array(
-                'user_id' => $userId,
-                'username' => (string)$userId,
-                'vendor_code' => 'gamblly',
-                'game_uid' => substr($gameUid, 0, 50),
-                'round_id' => substr($gameRound, 0, 100),
-                'currency' => substr(strtoupper($currency), 0, 10)
-            );
+            $username = (string)$userId;
             $stmt = $conn->prepare("SELECT username FROM users WHERE id=? LIMIT 1");
             $stmt->bind_param('i', $userId);
             $stmt->execute();
             $res = $stmt->get_result();
-            if ($res && $res->num_rows > 0) { $row['username'] = (string)$res->fetch_assoc()['username']; }
+            if ($res && $res->num_rows > 0) { $username = (string)$res->fetch_assoc()['username']; }
             $stmt->close();
 
+            // Direct insert into the known game_bet_history columns (no per-column SHOW queries).
             $txnShort = substr($txnId, 0, 85);
+            $rows = array();
             if ($bet > 0) {
-                game_api_insert_bet_history($conn, $row + array(
-                    'transaction_id' => 'gamblly_bet_' . $txnShort,
-                    'type' => 'bet',
-                    'amount' => (float)gamblly_api_units_to_decimal($bet, $scale),
-                    'balance_after' => (float)gamblly_api_units_to_decimal($balanceUnits - $bet, $scale)
-                ));
+                $rows[] = array('gamblly_bet_' . $txnShort, 'bet', gamblly_api_units_to_decimal($bet, $scale), gamblly_api_units_to_decimal($balanceUnits - $bet, $scale));
             }
             if ($win > 0) {
-                game_api_insert_bet_history($conn, $row + array(
-                    'transaction_id' => 'gamblly_win_' . $txnShort,
-                    'type' => ($action === 'refund') ? 'cancel' : 'win',
-                    'amount' => (float)gamblly_api_units_to_decimal($win, $scale),
-                    'balance_after' => (float)gamblly_api_units_to_decimal($newBalanceUnits, $scale)
-                ));
+                $rows[] = array('gamblly_win_' . $txnShort, ($action === 'refund') ? 'cancel' : 'win', gamblly_api_units_to_decimal($win, $scale), gamblly_api_units_to_decimal($newBalanceUnits, $scale));
+            }
+            $vendor = 'gamblly';
+            $gameUidText = substr($gameUid, 0, 50);
+            $roundText = substr($gameRound, 0, 100);
+            $currencyText = substr(strtoupper($currency), 0, 10);
+            $insert = $conn->prepare("INSERT INTO game_bet_history (user_id, username, vendor_code, game_uid, round_id, transaction_id, type, amount, balance_after, currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            foreach ($rows as $row) {
+                list($historyTxn, $historyType, $historyAmount, $historyBalance) = $row;
+                $insert->bind_param('isssssssss', $userId, $username, $vendor, $gameUidText, $roundText, $historyTxn, $historyType, $historyAmount, $historyBalance, $currencyText);
+                $insert->execute();
+            }
+            $insert->close();
+
+            if ($bet > 0) {
+                // Same rule as game_api_apply_turnover_progress: every bet counts toward turnover.
+                $betText = gamblly_api_units_to_decimal($bet, $scale);
+                $stmt = $conn->prepare("UPDATE users SET turnover_completed = COALESCE(turnover_completed,0) + ? WHERE id=?");
+                $stmt->bind_param('si', $betText, $userId);
+                $stmt->execute();
+                $stmt->close();
             }
         };
 
