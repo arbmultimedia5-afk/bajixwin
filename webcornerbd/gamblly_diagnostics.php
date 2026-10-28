@@ -3,6 +3,10 @@ require '../includes/auth_session.php';
 require '../includes/db.php';
 require_once '../includes/game_api_helper.php';
 require_once '../includes/gamblly_api_helper.php';
+require_once '../includes/propay_gateway_helper.php';
+require_once '../includes/akpay_gateway_helper.php';
+require_once '../includes/lgpay_gateway_helper.php';
+require_once '../includes/nekpay_gateway_helper.php';
 
 if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
     die('Access Denied');
@@ -22,8 +26,24 @@ $balanceType = '';
 $res = @$conn->query("SHOW COLUMNS FROM users LIKE 'balance'");
 if ($res && $res->num_rows > 0) { $balanceType = (string)$res->fetch_assoc()['Type']; }
 
+$nek = function_exists('nekpay_get_settings') ? nekpay_get_settings($conn) : array();
+$lg = function_exists('lgpay_get_settings') ? lgpay_get_settings($conn) : array();
+
+// Outgoing IP of this server: the address the payment gateway sees and must whitelist.
+$serverIp = '';
+if (isset($_GET['check_ip'])) {
+    $ch = curl_init('https://api.ipify.org');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 6);
+    $serverIp = trim((string)curl_exec($ch));
+    $ipError = curl_error($ch);
+    curl_close($ch);
+    if ($serverIp === '') { $serverIp = 'Could not detect: ' . $ipError; }
+}
+
 $callbacks = array();
 $launches = array();
+$payouts = array();
 $logPath = function_exists('game_api_debug_log_path') ? game_api_debug_log_path() : '';
 $logSize = ($logPath !== '' && is_file($logPath)) ? filesize($logPath) : 0;
 if ($logSize > 0) {
@@ -33,6 +53,10 @@ if ($logSize > 0) {
     $chunk = fread($fh, $readBytes);
     fclose($fh);
     foreach (explode("\n", $chunk) as $line) {
+        if (preg_match('/^\[([^\]]+)\] NEKPAY_PAYOUT_CALL endpoint=(\S+) params=(\{.*?\}) curlErr=(.*?) rawResponse=(.*)$/', $line, $p)) {
+            $payouts[] = array('time' => $p[1], 'endpoint' => $p[2], 'params' => json_decode($p[3], true), 'curl_error' => $p[4], 'response' => $p[5]);
+            continue;
+        }
         if (!preg_match('/^\[([^\]]+)\] (gamblly_callback|gamblly_launch_attempt) (.*)$/', $line, $m)) { continue; }
         $entry = json_decode($m[3], true);
         if (!is_array($entry)) { continue; }
@@ -42,6 +66,7 @@ if ($logSize > 0) {
 }
 $callbacks = array_slice($callbacks, -500);
 $launches = array_slice($launches, -15);
+$payouts = array_slice($payouts, -15);
 
 $total = count($callbacks);
 $failed = 0;
@@ -136,6 +161,42 @@ $h = function ($value) { return htmlspecialchars(is_scalar($value) || $value ===
                             <?php endforeach; ?>
                             </tbody>
                         </table>
+                    </div>
+                <?php endif; ?>
+            </section>
+
+            <section class="bg-white rounded-2xl border border-gray-200 p-5">
+                <h2 class="font-bold mb-3">Withdraw payout gateway</h2>
+                <div class="grid sm:grid-cols-2 gap-2 text-sm mb-4">
+                    <div>NEKpay enabled: <b class="<?php echo !empty($nek['is_enabled']) ? 'text-green-700' : 'text-red-600'; ?>"><?php echo !empty($nek['is_enabled']) ? 'YES' : 'NO'; ?></b></div>
+                    <div>NEKpay merchant: <b class="font-mono"><?php echo $h(isset($nek['merchant_code']) ? $nek['merchant_code'] : ''); ?></b> · key <b class="font-mono"><?php echo $h($maskKey(isset($nek['secret_code']) ? $nek['secret_code'] : '')); ?></b></div>
+                    <div>NEKpay API: <b class="font-mono break-all"><?php echo $h(isset($nek['api_base_url']) ? $nek['api_base_url'] : ''); ?></b></div>
+                    <div>LG Pay enabled: <b><?php echo !empty($lg['is_enabled']) ? 'YES' : 'NO'; ?></b></div>
+                    <div>Payout callback URL: <b class="font-mono break-all"><?php echo $h(game_api_site_url('/api/nekpay_payout_callback.php')); ?></b></div>
+                    <div>Server outgoing IP (whitelist this in the gateway):
+                        <?php if ($serverIp !== ''): ?><b class="font-mono"><?php echo $h($serverIp); ?></b>
+                        <?php else: ?><a href="?check_ip=1" class="text-blue-600 underline">Check IP</a><?php endif; ?>
+                    </div>
+                </div>
+                <?php if (!$payouts): ?>
+                    <p class="text-sm text-gray-500">No gateway payout attempts logged yet. Payouts are only sent when you press the gateway (NEKpay/LG Pay) approve button in Finance.</p>
+                <?php else: ?>
+                    <div class="overflow-x-auto">
+                    <table class="min-w-full text-xs">
+                        <thead><tr class="text-left text-gray-500 border-b"><th class="py-1 pr-3">Time</th><th class="pr-3">Payout ID</th><th class="pr-3">Amount</th><th class="pr-3">Bank</th><th class="pr-3">Connection error</th><th>Gateway response</th></tr></thead>
+                        <tbody>
+                        <?php foreach (array_reverse($payouts) as $row): $pp = is_array($row['params']) ? $row['params'] : array(); $resp = json_decode($row['response'], true); $ok = is_array($resp) && (strtoupper((string)(isset($resp['respCode']) ? $resp['respCode'] : '')) === 'SUCCESS'); ?>
+                            <tr class="border-b <?php echo $ok ? '' : 'bg-red-50 text-red-700'; ?>">
+                                <td class="py-1 pr-3 whitespace-nowrap"><?php echo $h($row['time']); ?></td>
+                                <td class="pr-3 font-mono"><?php echo $h(isset($pp['mch_transferId']) ? $pp['mch_transferId'] : ''); ?></td>
+                                <td class="pr-3"><?php echo $h(isset($pp['transfer_amount']) ? $pp['transfer_amount'] : ''); ?></td>
+                                <td class="pr-3"><?php echo $h(isset($pp['bank_code']) ? $pp['bank_code'] : ''); ?></td>
+                                <td class="pr-3"><?php echo $h($row['curl_error']); ?></td>
+                                <td class="font-mono break-all"><?php echo $h(substr($row['response'], 0, 300)); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
                     </div>
                 <?php endif; ?>
             </section>

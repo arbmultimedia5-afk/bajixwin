@@ -278,17 +278,9 @@ if (!function_exists('wcb_process_pending_withdrawal')) {
             return lgpay_submit_withdrawal_from_transaction($conn, $transactionId, $adminId);
         }
 
-        // 3. Manual Approval Fallback (If no auto-payout gateway is active)
-        $note = 'Approved manually by admin #' . $adminId;
-        $stmtUp = $conn->prepare("UPDATE transactions_fake SET status='approved', agent_id=?, admin_note=? WHERE id=? AND status='pending'");
-        if ($stmtUp) {
-            $stmtUp->bind_param('isi', $adminId, $note, $transactionId);
-            $stmtUp->execute();
-            $stmtUp->close();
-            return array('success' => true, 'message' => 'Withdrawal request approved manually.');
-        }
-
-        return array('success' => false, 'message' => 'Unable to update withdrawal status in database.');
+        // 3. No payout gateway is active: do not mark it approved, the money was not sent anywhere.
+        // Use the Manual approve button for withdrawals paid outside the site.
+        return array('success' => false, 'message' => 'No payout gateway is active (NEKpay disabled/missing keys and LG Pay unavailable). Nothing was sent. Enable NEKpay in Payment Gateway Settings, or use Manual approve after paying yourself.');
     }
 }
 
