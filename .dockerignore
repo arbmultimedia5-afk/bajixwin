@@ -1,0 +1,9 @@
+.git
+.gitignore
+Dockerfile
+.dockerignore
+My SQL
+scratch
+*.log
+error_log
+README.md
