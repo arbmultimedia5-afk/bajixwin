@@ -96,10 +96,12 @@ if (!function_exists('gamblly_api_member_account')) {
 
 if (!function_exists('gamblly_api_extract_player_id')) {
     function gamblly_api_extract_player_id($rawValue, $config) {
+        // member_account is sent as the plain user id, so player_uid comes back as-is.
         $raw = trim((string)$rawValue);
         if ($raw === '') { return 0; }
-        if (preg_match('/([0-9]+)/', $raw, $m)) { return (int)$m[1]; }
-        return (int)$raw;
+        if (ctype_digit($raw)) { return (int)$raw; }
+        if (preg_match('/([0-9]+)$/', $raw, $m)) { return (int)$m[1]; }
+        return 0;
     }
 }
 
@@ -234,36 +236,6 @@ if (!function_exists('gamblly_api_extract_launch_url')) {
     }
 }
 
-if (!function_exists('gamblly_api_ensure_transactions_table')) {
-    function gamblly_api_ensure_transactions_table($conn) {
-        if (function_exists('game_api_table_exists') && !game_api_table_exists($conn, 'transactions')) {
-            @$conn->query("CREATE TABLE IF NOT EXISTS `transactions` (
-                `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                `user_id` INT NOT NULL,
-                `txn_id` VARCHAR(160) NOT NULL,
-                `game_round` VARCHAR(160) DEFAULT NULL,
-                `game_name` VARCHAR(255) DEFAULT NULL,
-                `bet` DECIMAL(18,6) NOT NULL DEFAULT 0.000000,
-                `win` DECIMAL(18,6) NOT NULL DEFAULT 0.000000,
-                `result` VARCHAR(50) DEFAULT NULL,
-                `api_key` VARCHAR(255) DEFAULT NULL,
-                `response_data` LONGTEXT DEFAULT NULL,
-                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                PRIMARY KEY (`id`),
-                UNIQUE KEY `uniq_txn_id` (`txn_id`),
-                KEY `idx_user_id` (`user_id`),
-                KEY `idx_game_round` (`user_id`, `game_round`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-        }
-        if (function_exists('game_api_column_exists') && function_exists('game_api_ensure_column') && game_api_table_exists($conn, 'transactions')) {
-            game_api_ensure_column($conn, 'transactions', 'game_round', 'VARCHAR(160) DEFAULT NULL');
-            game_api_ensure_column($conn, 'transactions', 'response_data', 'LONGTEXT DEFAULT NULL');
-            if (function_exists('game_api_ensure_index')) { game_api_ensure_index($conn, 'transactions', 'idx_game_round', 'INDEX `idx_game_round` (`user_id`, `game_round`)'); }
-        }
-    }
-}
-
 if (!function_exists('gamblly_api_launch_game')) {
     function gamblly_api_launch_game($conn, $user, $gameUid, $walletBalance, $currency = '', $localGameUid = '', $game = array()) {
         $config = gamblly_api_get_config($conn);
@@ -308,6 +280,26 @@ if (!function_exists('gamblly_api_launch_game')) {
         $message = 'Game launch failed.';
         if (is_array($decoded)) {
             $message = trim((string)gamblly_api_pick($decoded, array('message', 'msg', 'error', 'errorMessage'), $message));
+        }
+        if (!$ok && is_array($decoded)) {
+            $errorCode = (string)gamblly_api_pick($decoded, array('code', 'errorCode', 'error_code'), '');
+            $knownCodes = array(
+                '10002' => 'Invalid API key',
+                '10004' => 'Invalid JSON or missing required fields',
+                '10005' => 'Temporary service error, please retry',
+                '10008' => 'Game does not exist',
+                '10011' => 'Player currency mismatch',
+                '10013' => 'Currency is unsupported',
+                '10014' => 'Player name is invalid',
+                '10015' => 'Insufficient agency balance',
+                '10016' => 'Player does not exist',
+                '10017' => 'Duplicate transfer_id',
+                '10022' => 'Parameter error',
+                '10025' => 'Exposure limit exceeded',
+                '10035' => 'Provider system error, please retry later',
+                '10040' => 'Domain or IP is not allowlisted'
+            );
+            if (isset($knownCodes[$errorCode])) { $message = $knownCodes[$errorCode] . ' (code ' . $errorCode . ')'; }
         }
         if (!$ok && isset($result['curl_error']) && $result['curl_error'] !== '') { $message = $result['curl_error']; }
         if (!$ok && isset($result['http_code']) && (int)$result['http_code'] > 0) { $message .= ' (HTTP ' . (int)$result['http_code'] . ')'; }
@@ -362,127 +354,6 @@ if (!function_exists('gamblly_api_wallet_request')) {
     }
 }
 
-if (!function_exists('gamblly_api_read_callback_payload')) {
-    function gamblly_api_read_callback_payload() {
-        $raw = file_get_contents('php://input');
-        $data = array();
-        if (trim((string)$raw) !== '') {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded)) { $data = $decoded; }
-        }
-        if (empty($data) && !empty($_POST)) { $data = $_POST; }
-        if (empty($data) && !empty($_GET)) { $data = $_GET; }
-        return array($data, (string)$raw);
-    }
-}
-
-if (!function_exists('gamblly_api_find_callback_transaction')) {
-    function gamblly_api_find_callback_transaction($conn, $transactionId) {
-        if (!function_exists('game_api_table_exists') || !game_api_table_exists($conn, 'game_api_callback_transactions')) { return false; }
-        $column = '';
-        if (function_exists('game_api_column_exists') && game_api_column_exists($conn, 'game_api_callback_transactions', 'transaction_id')) { $column = 'transaction_id'; }
-        elseif (function_exists('game_api_column_exists') && game_api_column_exists($conn, 'game_api_callback_transactions', 'external_transaction_id')) { $column = 'external_transaction_id'; }
-        if ($column === '') { return false; }
-        $sql = "SELECT id FROM game_api_callback_transactions WHERE `$column`=? LIMIT 1";
-        $stmt = @$conn->prepare($sql);
-        if (!$stmt) { return false; }
-        $stmt->bind_param('s', $transactionId);
-        $stmt->execute();
-        $res = $stmt->get_result();
-        $exists = ($res && $res->num_rows > 0);
-        $stmt->close();
-        return $exists;
-    }
-}
-
-if (!function_exists('gamblly_api_insert_callback_transaction')) {
-    function gamblly_api_insert_callback_transaction($conn, $payload) {
-        if (!function_exists('game_api_table_exists') || !game_api_table_exists($conn, 'game_api_callback_transactions')) { return false; }
-        $columns = array();
-        $values = array();
-        $types = '';
-
-        $map = array(
-            'user_id' => array('value_key' => 'user_id', 'type' => 'i'),
-            'player_id' => array('value_key' => 'user_id', 'type' => 'i'),
-            'game_uid' => array('value_key' => 'game_uid', 'type' => 's'),
-            'local_game_uid' => array('value_key' => 'game_uid', 'type' => 's'),
-            'api_game_id' => array('value_key' => 'game_uid', 'type' => 's'),
-            'round_id' => array('value_key' => 'round_id', 'type' => 's'),
-            'transaction_id' => array('value_key' => 'transaction_id', 'type' => 's'),
-            'external_transaction_id' => array('value_key' => 'transaction_id', 'type' => 's'),
-            'action_type' => array('value_key' => 'action_type', 'type' => 's'),
-            'callback_type' => array('value_key' => 'action_type', 'type' => 's'),
-            'amount' => array('value_key' => 'amount', 'type' => 'd'),
-            'balance_before' => array('value_key' => 'balance_before', 'type' => 'd'),
-            'balance_after' => array('value_key' => 'balance_after', 'type' => 'd'),
-            'status' => array('value_key' => 'status', 'type' => 's'),
-            'raw_payload' => array('value_key' => 'raw_payload', 'type' => 's'),
-            'raw_data' => array('value_key' => 'raw_payload', 'type' => 's')
-        );
-
-        foreach ($map as $col => $info) {
-            if (function_exists('game_api_column_exists') && game_api_column_exists($conn, 'game_api_callback_transactions', $col)) {
-                $key = $info['value_key'];
-                if (!array_key_exists($key, $payload)) { continue; }
-                $columns[] = $col;
-                $values[] = $payload[$key];
-                $types .= $info['type'];
-            }
-        }
-        if (empty($columns)) { return false; }
-        $placeholders = implode(',', array_fill(0, count($columns), '?'));
-        $sql = "INSERT INTO game_api_callback_transactions (`" . implode('`,`', $columns) . "`) VALUES ($placeholders)";
-        $stmt = @$conn->prepare($sql);
-        if (!$stmt) { return false; }
-        $refs = array();
-        $refs[] = $types;
-        for ($i = 0; $i < count($values); $i++) { $refs[] = &$values[$i]; }
-        call_user_func_array(array($stmt, 'bind_param'), $refs);
-        $ok = $stmt->execute();
-        $stmt->close();
-        return $ok;
-    }
-}
-
-if (!function_exists('gamblly_api_upsert_transaction_summary')) {
-    function gamblly_api_upsert_transaction_summary($conn, $userId, $data, $bet, $win, $txnId, $roundId) {
-        gamblly_api_ensure_transactions_table($conn);
-        if (!function_exists('game_api_table_exists') || !game_api_table_exists($conn, 'transactions')) { return false; }
-        $gameName = trim((string)gamblly_api_pick($data, array('game_name', 'gameName', 'game_uid', 'game_code'), ''));
-        $apiKey = trim((string)gamblly_api_pick($data, array('api_key', 'agency_uid'), ''));
-        $raw = gamblly_api_json_encode($data);
-        $result = ($win > 0) ? 'win' : (($bet > 0) ? 'loss' : 'settled');
-        $txnId = substr((string)$txnId, 0, 160);
-        $roundId = substr((string)$roundId, 0, 160);
-
-        $existingId = 0;
-        $find = @$conn->prepare("SELECT id FROM transactions WHERE txn_id=? LIMIT 1");
-        if ($find) {
-            $find->bind_param('s', $txnId);
-            $find->execute();
-            $res = $find->get_result();
-            if ($res && $res->num_rows > 0) { $existingId = (int)$res->fetch_assoc()['id']; }
-            $find->close();
-        }
-
-        if ($existingId > 0) {
-            $stmt = @$conn->prepare("UPDATE transactions SET user_id=?, game_round=?, game_name=?, bet=?, win=?, result=?, api_key=?, response_data=?, updated_at=CURRENT_TIMESTAMP WHERE id=? LIMIT 1");
-            if (!$stmt) { return false; }
-            $stmt->bind_param('issddsssi', $userId, $roundId, $gameName, $bet, $win, $result, $apiKey, $raw, $existingId);
-            $ok = $stmt->execute();
-            $stmt->close();
-            return $ok;
-        }
-
-        $stmt = @$conn->prepare("INSERT INTO transactions (user_id, txn_id, game_round, game_name, bet, win, result, api_key, response_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        if (!$stmt) { return false; }
-        $stmt->bind_param('isssddsss', $userId, $txnId, $roundId, $gameName, $bet, $win, $result, $apiKey, $raw);
-        $ok = $stmt->execute();
-        $stmt->close();
-        return $ok;
-    }
-}
 
 if (!function_exists('gamblly_api_response')) {
     function gamblly_api_response($payload, $httpCode = 200) {
@@ -495,209 +366,321 @@ if (!function_exists('gamblly_api_response')) {
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * V1 Seamless Wallet callback (Gamblly -> callback_url)
+ *
+ * Money is handled as integer minor units (no floats) so amounts are never
+ * rounded silently. Only bet_amount / win_amount touch the wallet; round_* and
+ * display_* fields are display-only and are ignored here on purpose.
+ * ------------------------------------------------------------------------- */
+
+if (!function_exists('gamblly_api_amount_scale')) {
+    // One explicit precision rule for provider, wallet and database.
+    // users.balance is DECIMAL(10,2) (BDT), so the default scale is 2. Raise the
+    // gamblly_amount_scale setting only after widening users.balance as well.
+    function gamblly_api_amount_scale($settings) {
+        $scale = (int)gamblly_api_get_setting_value($settings, 'gamblly_amount_scale', '2');
+        return ($scale < 0 || $scale > 6) ? 2 : $scale;
+    }
+}
+
+if (!function_exists('gamblly_api_parse_amount')) {
+    // Returns the amount as signed integer minor units, or null with $error set.
+    function gamblly_api_parse_amount($value, $scale, &$error) {
+        $error = '';
+        if ($value === null || $value === '') { return 0; }
+        if (is_int($value)) {
+            $value = (string)$value;
+        } elseif (is_float($value)) {
+            if (!is_finite($value)) { $error = 'not_finite'; return null; }
+            $value = sprintf('%.10F', $value);
+        } elseif (is_string($value)) {
+            $value = trim($value);
+        } else {
+            $error = 'not_a_number';
+            return null;
+        }
+        // Plain decimals only: no locale commas, exponents or currency symbols.
+        if (!preg_match('/^(-?)(\d+)(?:\.(\d+))?$/', $value, $m)) { $error = 'not_a_decimal'; return null; }
+        $fraction = isset($m[3]) ? rtrim($m[3], '0') : '';
+        if (strlen($fraction) > $scale) { $error = 'precision_exceeds_scale_' . $scale; return null; }
+        $integer = ltrim($m[2], '0');
+        if ($integer === '') { $integer = '0'; }
+        if (strlen($integer) > 12) { $error = 'amount_too_large'; return null; }
+        $units = (int)($integer . str_pad($fraction, $scale, '0'));
+        return ($m[1] === '-') ? -$units : $units;
+    }
+}
+
+if (!function_exists('gamblly_api_units_to_decimal')) {
+    function gamblly_api_units_to_decimal($units, $scale) {
+        $negative = ($units < 0);
+        $digits = (string)abs((int)$units);
+        if ($scale > 0) {
+            $digits = str_pad($digits, $scale + 1, '0', STR_PAD_LEFT);
+            $digits = substr($digits, 0, -$scale) . '.' . substr($digits, -$scale);
+        }
+        return ($negative ? '-' : '') . $digits;
+    }
+}
+
+if (!function_exists('gamblly_api_callback_respond')) {
+    // Sends the JSON reply first, then runs non-critical work (history, logging)
+    // so the provider gets its answer as fast as possible.
+    function gamblly_api_callback_respond($payload, $httpCode, $log, $afterResponse = null) {
+        if (!headers_sent()) {
+            http_response_code($httpCode);
+            header('Content-Type: application/json; charset=utf-8');
+            header('Cache-Control: no-store');
+        }
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+        elseif (function_exists('litespeed_finish_request')) { @litespeed_finish_request(); }
+
+        if (is_callable($afterResponse)) {
+            try { call_user_func($afterResponse); }
+            catch (Throwable $e) { $log['after_response_error'] = $e->getMessage(); }
+        }
+        $log['http_code'] = $httpCode;
+        $log['status'] = !empty($payload['status']);
+        if (isset($payload['balance'])) { $log['balance'] = $payload['balance']; }
+        if (isset($log['started_at'])) {
+            $log['ms'] = (int)round((microtime(true) - $log['started_at']) * 1000);
+            unset($log['started_at']);
+        }
+        if (function_exists('game_api_debug_log')) { game_api_debug_log('gamblly_callback', $log); }
+        exit;
+    }
+}
+
+if (!function_exists('gamblly_api_callback_ok')) {
+    function gamblly_api_callback_ok($balanceUnits, $scale, $log, $afterResponse = null) {
+        $payload = array(
+            'balance' => (float)gamblly_api_units_to_decimal($balanceUnits, $scale),
+            'status' => true
+        );
+        gamblly_api_callback_respond($payload, 200, $log, $afterResponse);
+    }
+}
+
+if (!function_exists('gamblly_api_callback_fail')) {
+    // Failure reply never carries a balance, so it cannot be mistaken for success.
+    function gamblly_api_callback_fail($reason, $message, $httpCode, $log) {
+        $log['reason'] = $reason;
+        gamblly_api_callback_respond(array('status' => false, 'msg' => $message, 'message' => $message), $httpCode, $log);
+    }
+}
+
+if (!function_exists('gamblly_api_read_user_balance')) {
+    function gamblly_api_read_user_balance($conn, $userId, $forUpdate) {
+        $sql = "SELECT balance FROM users WHERE id=? LIMIT 1" . ($forUpdate ? " FOR UPDATE" : "");
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param('i', $userId);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $row = ($res && $res->num_rows > 0) ? $res->fetch_assoc() : null;
+        $stmt->close();
+        if ($row === null) { return null; }
+        return ($row['balance'] === null) ? '0' : (string)$row['balance'];
+    }
+}
+
 if (!function_exists('gamblly_api_handle_callback')) {
     function gamblly_api_handle_callback($conn) {
-        if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { gamblly_api_response(array('success' => true)); }
-        if (function_exists('game_api_ensure_schema')) { game_api_ensure_schema($conn, false); }
-        gamblly_api_ensure_transactions_table($conn);
+        $log = array('started_at' => microtime(true));
+        // Every DB error must throw so the wallet change is rolled back, never silently skipped.
+        mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+        if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+            gamblly_api_response(array('status' => true));
+        }
 
-        list($data, $raw) = gamblly_api_read_callback_payload();
-        $config = gamblly_api_get_config($conn);
+        $raw = (string)file_get_contents('php://input');
+        $data = ($raw !== '') ? json_decode($raw, true) : null;
+        if (!is_array($data) && !empty($_POST)) { $data = $_POST; }
         if (!is_array($data) || empty($data)) {
-            gamblly_api_response(array('status' => true, 'balance' => 0.00, 'message' => 'Empty request'));
+            gamblly_api_callback_fail('invalid_json', 'Invalid JSON body', 400, $log);
         }
 
-        $receivedApiKey = trim((string)gamblly_api_pick($data, array('api_key', 'agency_uid', 'APIKey', 'key', 'token'), ''));
-        if ($receivedApiKey === '' && isset($_SERVER['HTTP_X_API_KEY'])) { $receivedApiKey = trim((string)$_SERVER['HTTP_X_API_KEY']); }
-        if ($receivedApiKey === '' && isset($_SERVER['HTTP_X_AGENCY_UID'])) { $receivedApiKey = trim((string)$_SERVER['HTTP_X_AGENCY_UID']); }
+        $settings = function_exists('game_api_get_settings') ? game_api_get_settings($conn) : array();
+        $config = gamblly_api_get_config($conn, $settings);
+        $scale = gamblly_api_amount_scale($settings);
 
-        $expectedApiKey   = trim((string)($config['api_key'] ?? ''));
-        $expectedAgentCode = trim((string)($config['secret_key'] ?? '')); // agent_code / suffix stored as secret_key
+        $action = strtolower(trim((string)gamblly_api_pick($data, 'action', '')));
+        $txnId = trim((string)gamblly_api_pick($data, 'txn_id', ''));
+        $gameRound = trim((string)gamblly_api_pick($data, 'game_round', ''));
+        $gameUid = trim((string)gamblly_api_pick($data, 'game_uid', ''));
+        $playerRaw = trim((string)gamblly_api_pick($data, array('player_uid', 'member_account'), ''));
+        $log['action'] = $action;
+        $log['txn_id'] = $txnId;
+        $log['game_round'] = $gameRound;
+        $log['player_uid'] = $playerRaw;
+        $log['bet_amount'] = isset($data['bet_amount']) ? $data['bet_amount'] : null;
+        $log['win_amount'] = isset($data['win_amount']) ? $data['win_amount'] : null;
 
-        // Accept callback if key matches api_key OR agent_code/suffix (Gamblly sends agency_uid=b2cb3 in callbacks)
-        if ($receivedApiKey !== '' && $expectedApiKey !== '') {
-            $keyMatched = hash_equals($expectedApiKey, $receivedApiKey)
-                || ($expectedAgentCode !== '' && hash_equals($expectedAgentCode, $receivedApiKey));
-            if (!$keyMatched) {
-                // Log mismatch but do NOT block - Gamblly may use different key formats
-                if (function_exists('game_api_debug_log')) {
-                    game_api_debug_log('gamblly_key_mismatch', array('received' => $receivedApiKey, 'expected' => $expectedApiKey));
-                }
-            }
+        $expectedKey = trim((string)$config['api_key']);
+        $receivedKey = trim((string)gamblly_api_pick($data, 'api_key', ''));
+        if ($expectedKey === '') {
+            gamblly_api_callback_fail('api_key_not_configured', 'Callback not configured', 500, $log);
+        }
+        if ($receivedKey === '' || !hash_equals($expectedKey, $receivedKey)) {
+            $log['received_fields'] = implode(',', array_keys($data));
+            gamblly_api_callback_fail('invalid_api_key', 'Invalid API key', 401, $log);
         }
 
-
-        $playerRaw = gamblly_api_pick($data, array('player_uid', 'member_account', 'member', 'username', 'user_id', 'uid', 'player_id', 'account', 'player'), '');
         $userId = gamblly_api_extract_player_id($playerRaw, $config);
+        if ($userId <= 0) {
+            gamblly_api_callback_fail('invalid_player', 'Invalid player', 400, $log);
+        }
 
-        $action = strtolower(trim((string)gamblly_api_pick($data, array('action', 'type', 'method', 'transaction_type', 'bet_type'), '')));
-        $roundId = trim((string)gamblly_api_pick($data, array('round_id', 'roundId', 'game_round', 'gameRound', 'game_round_id'), ''));
-        $baseTxnId = trim((string)gamblly_api_pick($data, array('txn_id', 'transaction_id', 'serial_number', 'id', 'order_id', 'transfer_id'), ''));
-        if ($baseTxnId === '') { $baseTxnId = sha1($raw !== '' ? $raw : gamblly_api_json_encode($data)); }
-        if ($roundId === '') { $roundId = $baseTxnId; }
+        $amountError = '';
+        $bet = gamblly_api_parse_amount(isset($data['bet_amount']) ? $data['bet_amount'] : 0, $scale, $amountError);
+        if ($bet === null) { gamblly_api_callback_fail('invalid_bet_amount:' . $amountError, 'Invalid amount', 400, $log); }
+        $win = gamblly_api_parse_amount(isset($data['win_amount']) ? $data['win_amount'] : 0, $scale, $amountError);
+        if ($win === null) { gamblly_api_callback_fail('invalid_win_amount:' . $amountError, 'Invalid amount', 400, $log); }
 
-        @$conn->begin_transaction();
+        // Refund normalization: a refund is always a credit, never a new debit.
+        if ($action === 'refund') {
+            $credit = ($win !== 0) ? abs($win) : abs($bet);
+            $bet = 0;
+            $win = $credit;
+        } elseif ($bet < 0 || $win < 0) {
+            if ($bet < 0 && $win === 0) { $action = 'refund'; }
+            $net = $win - $bet;
+            if ($net >= 0) { $bet = 0; $win = $net; }
+            else { $bet = -$net; $win = 0; }
+        }
+        $log['applied_bet'] = gamblly_api_units_to_decimal($bet, $scale);
+        $log['applied_win'] = gamblly_api_units_to_decimal($win, $scale);
 
-        $user = null;
-        if ($userId > 0) {
-            $stmt = @$conn->prepare("SELECT id, username, balance FROM users WHERE id=? LIMIT 1 FOR UPDATE");
-            if ($stmt) {
-                $stmt->bind_param('i', $userId);
-                $stmt->execute();
-                $res = $stmt->get_result();
-                if ($res && $res->num_rows > 0) { $user = $res->fetch_assoc(); }
-                $stmt->close();
+        try {
+            // deposit_required is an informational notice; balance / zero-zero is a no-op lookup.
+            if ($action === 'deposit_required' || ($bet === 0 && $win === 0)) {
+                $balanceText = gamblly_api_read_user_balance($conn, $userId, false);
+                if ($balanceText === null) { gamblly_api_callback_fail('player_not_found', 'Player not found', 404, $log); }
+                $balanceUnits = gamblly_api_parse_amount($balanceText, $scale, $amountError);
+                if ($balanceUnits === null) { gamblly_api_callback_fail('balance_precision:' . $amountError, 'Wallet error', 500, $log); }
+                if ($action === 'deposit_required') { $log['msg'] = (string)gamblly_api_pick($data, 'msg', ''); }
+                $log['reason'] = 'no_op';
+                gamblly_api_callback_ok($balanceUnits, $scale, $log);
             }
-        }
 
-        if (!$user && $playerRaw !== '') {
-            $cleanUser = trim((string)$playerRaw);
-            $stmt = @$conn->prepare("SELECT id, username, balance FROM users WHERE username=? OR email=? LIMIT 1 FOR UPDATE");
-            if ($stmt) {
-                $stmt->bind_param('ss', $cleanUser, $cleanUser);
-                $stmt->execute();
-                $res = $stmt->get_result();
-                if ($res && $res->num_rows > 0) {
-                    $user = $res->fetch_assoc();
-                    $userId = (int)$user['id'];
-                }
-                $stmt->close();
+            // txn_id is the idempotency key (provider serial_number).
+            if ($txnId === '') {
+                $txnId = 'raw_' . sha1($raw !== '' ? $raw : gamblly_api_json_encode($data));
+                $log['txn_id_fallback'] = $txnId;
             }
-        }
+            $externalId = 'gamblly_' . (strlen($txnId) > 150 ? sha1($txnId) : $txnId);
+            $legacyBetId = 'gamblly_bet_' . $txnId;
+            $legacyWinId = 'gamblly_win_' . $txnId;
 
-        if (!$user) {
-            @$conn->commit();
-            gamblly_api_response(array(
-                'status' => true,
-                'code' => 0,
-                'balance' => 0.00,
-                'data' => array('balance' => 0.00),
-                'message' => 'Player healthcheck OK'
-            ));
-        }
-
-        $balanceBefore = round((float)$user['balance'], 6);
-
-        // Special Case: action=deposit_required
-        if ($action === 'deposit_required') {
-            @$conn->commit();
-            $balVal = round((float)$balanceBefore, 2);
-            gamblly_api_response(array(
-                'balance' => $balVal,
-                'status' => true,
-                'code' => 0,
-                'data' => array('balance' => $balVal),
-                'message' => 'Deposit required notice received'
-            ));
-        }
-
-        if (in_array($action, array('balance', 'getbalance', 'get_balance', 'checkbalance', 'check_balance'), true)) {
-            @$conn->commit();
-            $balVal = round((float)$balanceBefore, 2);
-            gamblly_api_response(array(
-                'balance' => $balVal,
-                'status' => true,
-                'code' => 0,
-                'data' => array('balance' => $balVal)
-            ));
-        }
-
-        $betAmount = 0.0;
-        $winAmount = 0.0;
-        $genericAmount = gamblly_api_number(gamblly_api_pick($data, array('amount', 'money'), 0));
-        $explicitBet = gamblly_api_number(gamblly_api_pick($data, array('bet_amount', 'bet', 'stake', 'debit_amount'), 0));
-        $explicitWin = gamblly_api_number(gamblly_api_pick($data, array('win_amount', 'win', 'payout', 'credit_amount'), 0));
-        if ($explicitBet > 0) { $betAmount = $explicitBet; }
-        if ($explicitWin > 0) { $winAmount = $explicitWin; }
-        if ($genericAmount > 0 && $betAmount <= 0 && $winAmount <= 0) {
-            if (in_array($action, array('win','credit','settle','settlement','payout','reward'), true)) { $winAmount = $genericAmount; }
-            else { $betAmount = $genericAmount; }
-        }
-
-        $balanceAfter = $balanceBefore;
-        $processed = array();
-        $rawJson = $raw !== '' ? $raw : gamblly_api_json_encode($data);
-
-        if ($betAmount > 0) {
-            $txnId = 'gamblly_bet_' . $baseTxnId;
-            if (!gamblly_api_find_callback_transaction($conn, $txnId)) {
-                $balanceAfter = round($balanceAfter - $betAmount, 6);
-                if ($balanceAfter < 0) { $balanceAfter = 0.0; }
-                $processed[] = array('type' => 'bet', 'txn_id' => $txnId, 'amount' => $betAmount, 'before' => $balanceBefore, 'after' => $balanceAfter);
+            $conn->begin_transaction();
+            $balanceText = gamblly_api_read_user_balance($conn, $userId, true);
+            if ($balanceText === null) {
+                $conn->rollback();
+                gamblly_api_callback_fail('player_not_found', 'Player not found', 404, $log);
             }
-        }
-        if ($winAmount > 0) {
-            $txnId = 'gamblly_win_' . $baseTxnId;
-            if (!gamblly_api_find_callback_transaction($conn, $txnId)) {
-                $beforeWin = $balanceAfter;
-                $balanceAfter = round($balanceAfter + $winAmount, 6);
-                $processed[] = array('type' => 'win', 'txn_id' => $txnId, 'amount' => $winAmount, 'before' => $beforeWin, 'after' => $balanceAfter);
+            $balanceUnits = gamblly_api_parse_amount($balanceText, $scale, $amountError);
+            if ($balanceUnits === null) {
+                $conn->rollback();
+                gamblly_api_callback_fail('balance_precision:' . $amountError, 'Wallet error', 500, $log);
             }
+
+            $stmt = $conn->prepare("SELECT id FROM game_api_callback_transactions WHERE external_transaction_id IN (?, ?, ?) LIMIT 1");
+            $stmt->bind_param('sss', $externalId, $legacyBetId, $legacyWinId);
+            $stmt->execute();
+            $res = $stmt->get_result();
+            $alreadyApplied = ($res && $res->num_rows > 0);
+            $stmt->close();
+            if ($alreadyApplied) {
+                $conn->commit();
+                $log['reason'] = 'duplicate_txn_id';
+                gamblly_api_callback_ok($balanceUnits, $scale, $log);
+            }
+
+            if ($bet > $balanceUnits) {
+                $conn->rollback();
+                gamblly_api_callback_fail('insufficient_balance', 'Insufficient balance', 200, $log);
+            }
+
+            // bet / win / refund / bet_win: one atomic net change.
+            $newBalanceUnits = $balanceUnits - $bet + $win;
+            $beforeText = gamblly_api_units_to_decimal($balanceUnits, $scale);
+            $afterText = gamblly_api_units_to_decimal($newBalanceUnits, $scale);
+            $netText = gamblly_api_units_to_decimal($win - $bet, $scale);
+            $callbackType = substr($action !== '' ? $action : 'unknown', 0, 40);
+            $roundText = substr($gameRound, 0, 120);
+            $gameUidText = substr($gameUid, 0, 120);
+            $rawSafe = $data;
+            unset($rawSafe['api_key']);
+            $rawJson = gamblly_api_json_encode($rawSafe);
+
+            $stmt = $conn->prepare("INSERT INTO game_api_callback_transactions (external_transaction_id, player_id, callback_type, api_game_id, round_id, amount, balance_before, balance_after, raw_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param('sisssssss', $externalId, $userId, $callbackType, $gameUidText, $roundText, $netText, $beforeText, $afterText, $rawJson);
+            $stmt->execute();
+            $stmt->close();
+
+            $stmt = $conn->prepare("UPDATE users SET balance=? WHERE id=? LIMIT 1");
+            $stmt->bind_param('si', $afterText, $userId);
+            $stmt->execute();
+            $stmt->close();
+
+            $conn->commit();
+        } catch (Throwable $e) {
+            try { $conn->rollback(); } catch (Throwable $ignored) {}
+            if ($e instanceof mysqli_sql_exception && (int)$e->getCode() === 1062) {
+                // Same txn_id committed by a parallel request: report the real balance, apply nothing.
+                try {
+                    $balanceText = gamblly_api_read_user_balance($conn, $userId, false);
+                    $balanceUnits = ($balanceText === null) ? null : gamblly_api_parse_amount($balanceText, $scale, $amountError);
+                    if ($balanceUnits !== null) {
+                        $log['reason'] = 'duplicate_txn_id_race';
+                        gamblly_api_callback_ok($balanceUnits, $scale, $log);
+                    }
+                } catch (Throwable $ignored) {}
+            }
+            gamblly_api_callback_fail('exception:' . $e->getMessage(), 'Wallet update failed', 500, $log);
         }
 
-        if (empty($processed)) {
-            @$conn->commit();
-            $balVal = round((float)$balanceAfter, 2);
-            gamblly_api_response(array(
-                'balance' => $balVal,
-                'status' => true,
-                'code' => 0,
-                'data' => array('balance' => $balVal),
-                'message' => 'Duplicate or zero transaction'
-            ));
-        }
-
-        $stmt = @$conn->prepare("UPDATE users SET balance=? WHERE id=? LIMIT 1");
-        if (!$stmt) {
-            @$conn->rollback();
-            gamblly_api_response(array('status' => false, 'message' => 'Wallet update failed'), 500);
-        }
-        $stmt->bind_param('di', $balanceAfter, $userId);
-        $ok = $stmt->execute();
-        $stmt->close();
-        if (!$ok) {
-            @$conn->rollback();
-            gamblly_api_response(array('status' => false, 'message' => 'Wallet update failed'), 500);
-        }
-
-        foreach ($processed as $row) {
-            gamblly_api_insert_callback_transaction($conn, array(
+        // Wallet is committed. Bet history / turnover run after the reply is sent.
+        $currency = (string)gamblly_api_pick($data, 'currency_code', $config['currency']);
+        $afterResponse = function () use ($conn, $userId, $gameUid, $gameRound, $txnId, $bet, $win, $action, $balanceUnits, $newBalanceUnits, $scale, $currency) {
+            if (!function_exists('game_api_insert_bet_history')) { return; }
+            $row = array(
                 'user_id' => $userId,
-                'game_uid' => trim((string)gamblly_api_pick($data, array('game_uid','game_code','game_id'), '')),
-                'round_id' => $roundId,
-                'transaction_id' => $row['txn_id'],
-                'action_type' => $row['type'],
-                'amount' => $row['amount'],
-                'balance_before' => $row['before'],
-                'balance_after' => $row['after'],
-                'status' => 'success',
-                'raw_payload' => $rawJson
-            ));
-            if (function_exists('game_api_insert_bet_history')) {
-                game_api_insert_bet_history($conn, array(
-                    'user_id' => $userId,
-                    'username' => isset($user['username']) ? $user['username'] : '',
-                    'vendor_code' => 'gamblly',
-                    'game_uid' => trim((string)gamblly_api_pick($data, array('game_uid','game_code','game_id'), '')),
-                    'round_id' => $roundId,
-                    'transaction_id' => $row['txn_id'],
-                    'type' => ($row['type'] === 'win' ? 'win' : 'bet'),
-                    'amount' => $row['amount'],
-                    'balance_after' => $row['after'],
-                    'currency' => $config['currency']
+                'username' => (string)$userId,
+                'vendor_code' => 'gamblly',
+                'game_uid' => substr($gameUid, 0, 50),
+                'round_id' => substr($gameRound, 0, 100),
+                'currency' => substr(strtoupper($currency), 0, 10)
+            );
+            $stmt = $conn->prepare("SELECT username FROM users WHERE id=? LIMIT 1");
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $res = $stmt->get_result();
+            if ($res && $res->num_rows > 0) { $row['username'] = (string)$res->fetch_assoc()['username']; }
+            $stmt->close();
+
+            $txnShort = substr($txnId, 0, 85);
+            if ($bet > 0) {
+                game_api_insert_bet_history($conn, $row + array(
+                    'transaction_id' => 'gamblly_bet_' . $txnShort,
+                    'type' => 'bet',
+                    'amount' => (float)gamblly_api_units_to_decimal($bet, $scale),
+                    'balance_after' => (float)gamblly_api_units_to_decimal($balanceUnits - $bet, $scale)
                 ));
             }
-        }
-        gamblly_api_upsert_transaction_summary($conn, $userId, $data, $betAmount, $winAmount, 'gamblly_' . $baseTxnId, $roundId);
-        @$conn->commit();
+            if ($win > 0) {
+                game_api_insert_bet_history($conn, $row + array(
+                    'transaction_id' => 'gamblly_win_' . $txnShort,
+                    'type' => ($action === 'refund') ? 'cancel' : 'win',
+                    'amount' => (float)gamblly_api_units_to_decimal($win, $scale),
+                    'balance_after' => (float)gamblly_api_units_to_decimal($newBalanceUnits, $scale)
+                ));
+            }
+        };
 
-        $finalBal = round((float)$balanceAfter, 2);
-        gamblly_api_response(array(
-            'balance' => $finalBal,
-            'status' => true,
-            'code' => 0,
-            'data' => array('balance' => $finalBal)
-        ));
+        $log['reason'] = 'applied';
+        gamblly_api_callback_ok($newBalanceUnits, $scale, $log, $afterResponse);
     }
 }
 ?>

@@ -18,9 +18,12 @@ if ($conn->connect_error) {
 $conn->set_charset("utf8mb4");
 
 
+// Wallet callbacks must answer fast: skip page-level patches/setup for them.
+$is_wallet_callback = defined('GAMBLLY_WALLET_CALLBACK');
+
 // Auto-fix 9Wicket local game icon if the SQL backup has an empty/placeholder image.
 $nine_wicket_icon_patch = __DIR__ . '/game_api_9wicket_icon_patch.php';
-if (file_exists($nine_wicket_icon_patch)) {
+if (!$is_wallet_callback && file_exists($nine_wicket_icon_patch)) {
     require_once $nine_wicket_icon_patch;
     if (function_exists('apply_9wicket_icon_patch')) {
         @apply_9wicket_icon_patch($conn);
@@ -29,7 +32,7 @@ if (file_exists($nine_wicket_icon_patch)) {
 
 // Auto-setup Gamblly API credentials and seed mappings
 $gamblly_setup_file = __DIR__ . '/gamblly_auto_setup.php';
-if (file_exists($gamblly_setup_file)) {
+if (!$is_wallet_callback && file_exists($gamblly_setup_file)) {
     require_once $gamblly_setup_file;
     if (function_exists('gamblly_auto_setup_run')) {
         @gamblly_auto_setup_run($conn);

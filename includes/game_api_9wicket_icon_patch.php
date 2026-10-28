@@ -15,6 +15,13 @@ if (!function_exists('apply_9wicket_icon_patch')) {
 
         $iconPath = '/uploads/game_icons/9wickets.jpg';
 
+        // The UPDATE scans the whole games table; run it at most once per hour, not on every request.
+        $marker = dirname(__DIR__) . '/cache/.9wicket_icon_patch';
+        if (is_file($marker) && (time() - (int)@filemtime($marker)) < 3600) {
+            return true;
+        }
+        @touch($marker);
+
         // Make sure required columns exist before running the patch on older/custom DBs.
         $hasGames = @$conn->query("SHOW TABLES LIKE 'games'");
         if (!$hasGames || $hasGames->num_rows < 1) {

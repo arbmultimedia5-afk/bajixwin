@@ -1,60 +1,32 @@
 <?php
 /**
  * Gamblly Auto Setup & Database Seeding Helper.
- * This runs automatically on page load to configure the database
- * with the correct Gamblly API keys and seed all provider games.
+ * Fills in the Gamblly provider settings only when they are missing, so the
+ * API key saved from Admin Panel > Game API Key is never overwritten.
  */
 
 if (!function_exists('gamblly_auto_setup_run')) {
-    function gamblly_auto_setup_run($conn)
-    {
-        // Only run setup if game_api_provider is not set to GAMBLLY,
-        // or if the api_token does not match the active key.
-        $res = @$conn->query("SELECT setting_value FROM game_settings WHERE setting_key='game_api_provider' LIMIT 1");
-        $currentProvider = '';
-        if ($res && $res->num_rows > 0) {
-            $currentProvider = trim((string) $res->fetch_assoc()['setting_value']);
+    function gamblly_auto_setup_run($conn) {
+        $defaultKey = 'ee761aea015CodeHub94fbe22b19aa61';
+        $expectedEndpoint = 'https://game.gambllyapi.com/production/v1/gameLaunch.php';
+
+        $current = array();
+        $res = @$conn->query("SELECT setting_key, setting_value FROM game_settings WHERE setting_key IN ('game_api_provider','api_token','api_endpoint','gamblly_launch_url')");
+        if ($res) {
+            while ($row = $res->fetch_assoc()) { $current[$row['setting_key']] = trim((string)$row['setting_value']); }
         }
 
-        $resKey = @$conn->query("SELECT setting_value FROM game_settings WHERE setting_key='api_token' LIMIT 1");
-        $currentKey = '';
-        if ($resKey && $resKey->num_rows > 0) {
-            $currentKey = trim((string) $resKey->fetch_assoc()['setting_value']);
-        }
+        $updates = array();
+        if (!isset($current['game_api_provider']) || $current['game_api_provider'] !== 'GAMBLLY') { $updates['game_api_provider'] = 'GAMBLLY'; }
+        if (!isset($current['api_token']) || $current['api_token'] === '') { $updates['api_token'] = $defaultKey; }
+        if (!isset($current['api_endpoint']) || stripos($current['api_endpoint'], 'game.gambllyapi.com') === false) { $updates['api_endpoint'] = $expectedEndpoint; }
+        if (isset($current['gamblly_launch_url']) && $current['gamblly_launch_url'] !== '' && $current['gamblly_launch_url'] !== $expectedEndpoint) { $updates['gamblly_launch_url'] = $expectedEndpoint; }
+        if (empty($updates)) { return; }
 
-        $resEndpoint = @$conn->query("SELECT setting_value FROM game_settings WHERE setting_key='api_endpoint' LIMIT 1");
-        $currentEndpoint = '';
-        if ($resEndpoint && $resEndpoint->num_rows > 0) {
-            $currentEndpoint = trim((string) $resEndpoint->fetch_assoc()['setting_value']);
-        }
-
-        $resLaunchUrl = @$conn->query("SELECT setting_value FROM game_settings WHERE setting_key='gamblly_launch_url' LIMIT 1");
-        $currentLaunchUrl = '';
-        if ($resLaunchUrl && $resLaunchUrl->num_rows > 0) {
-            $currentLaunchUrl = trim((string) $resLaunchUrl->fetch_assoc()['setting_value']);
-        }
-
-        // Only run setup if game_api_provider is not configured in DB at all
-        if ($currentProvider === '' && $currentKey === '') {
-            require_once __DIR__ . '/game_api_helper.php';
-
-            // Ensure the schema is ready
-            game_api_ensure_schema($conn, false);
-
-            $defaultKey = 'ee761aea015CodeHub94fbe22b19aa61';
-            $defaultEndpoint = 'https://game.gambllyapi.com/production/v1/gameLaunch.php';
-
-            // Seed default settings only if empty
-            game_api_set_setting($conn, 'game_api_provider', 'GAMBLLY');
-            game_api_set_setting($conn, 'api_token', $defaultKey);
-            game_api_set_setting($conn, 'secret_key', 'b2cb3'); // Suffix
-            game_api_set_setting($conn, 'agent_code', 'b2cb3'); // Prefix
-            game_api_set_setting($conn, 'api_endpoint', $defaultEndpoint);
-            game_api_set_setting($conn, 'gamblly_launch_url', $defaultEndpoint);
-
-            // Force mappings to seed so all games populate
-            game_api_seed_mappings($conn);
-        }
+        require_once __DIR__ . '/game_api_helper.php';
+        game_api_ensure_schema($conn, false);
+        foreach ($updates as $key => $value) { game_api_set_setting($conn, $key, $value); }
+        game_api_seed_mappings($conn);
     }
 }
 ?>
