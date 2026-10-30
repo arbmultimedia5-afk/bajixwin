@@ -1,6 +1,9 @@
 <?php
 require_once __DIR__ . '/nekpay_gateway_helper.php';
 
+// Withdrawals up to this amount (৳) are sent to the payout gateway automatically, without admin approval.
+if (!defined('WCB_AUTO_WITHDRAW_MAX')) { define('WCB_AUTO_WITHDRAW_MAX', 2000); }
+
 if (!function_exists('wcb_withdraw_table_exists')) {
     function wcb_withdraw_table_exists($conn, $table) {
         $table = preg_replace('/[^a-zA-Z0-9_]/', '', (string)$table);
@@ -257,7 +260,7 @@ if (!function_exists('wcb_process_pending_withdrawal')) {
 
                 $payoutRes = nekpay_create_payout($conn, $merchantTxId, $bankCode, $accountNumber, $accountNumber, $amount);
                 if (!empty($payoutRes['success'])) {
-                    $note = 'Approved via NEKpay Payout (Tx: ' . $merchantTxId . ') by admin #' . $adminId;
+                    $note = 'Approved via NEKpay Payout (Tx: ' . $merchantTxId . ') ' . ($adminId > 0 ? 'by admin #' . $adminId : 'automatically (auto withdraw)');
                     $stmtUp = $conn->prepare("UPDATE transactions_fake SET status='approved', agent_id=?, admin_note=?, transaction_id=? WHERE id=? AND status='pending'");
                     if ($stmtUp) {
                         $stmtUp->bind_param('issi', $adminId, $note, $merchantTxId, $transactionId);
@@ -400,7 +403,19 @@ if (!function_exists('wcb_withdraw_create_request')) {
         $pinHash = (string)($wallet['withdraw_pin_hash'] ?? '');
         if ($pinHash === '' || !password_verify($pin, $pinHash)) { return array('success' => false, 'message' => 'Incorrect withdrawal PIN.'); }
         if (function_exists('wcb_create_pending_withdraw_request')) {
-            return wcb_create_pending_withdraw_request($conn, $userId, $amount, $wallet);
+            $result = wcb_create_pending_withdraw_request($conn, $userId, $amount, $wallet);
+            // Auto payout: small withdrawals go straight to the gateway without admin approval.
+            // If the gateway refuses, the request simply stays pending for the admin.
+            if (!empty($result['success']) && !empty($result['transaction_id']) && $amount <= WCB_AUTO_WITHDRAW_MAX) {
+                $txId = intval($result['transaction_id']);
+                $auto = wcb_process_pending_withdrawal($conn, $txId, 0);
+                if (!empty($auto['success'])) {
+                    $result['message'] = 'Withdrawal is being sent to your account automatically.';
+                } else {
+                    error_log('Auto withdraw payout failed for tx #' . $txId . ': ' . ($auto['message'] ?? ''));
+                }
+            }
+            return $result;
         }
         if (!function_exists('propay_submit_withdrawal')) { return array('success' => false, 'message' => 'Payment gateway service is unavailable.'); }
         return propay_submit_withdrawal($conn, $userId, $amount, $wallet);
