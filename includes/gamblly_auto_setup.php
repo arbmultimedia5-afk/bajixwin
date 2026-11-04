@@ -7,7 +7,7 @@
 
 if (!function_exists('gamblly_auto_setup_run')) {
     function gamblly_auto_setup_run($conn) {
-        $defaultKey = 'ee761aea015CodeHub94fbe22b19aa61';
+        $defaultKey = '07d92b12ebaCodeHub944d2237b6af09';
         $expectedEndpoint = 'https://game.gambllyapi.com/production/v1/gameLaunch.php';
 
         $current = array();
@@ -19,7 +19,7 @@ if (!function_exists('gamblly_auto_setup_run')) {
         $updates = array();
         if (!isset($current['game_api_provider']) || $current['game_api_provider'] !== 'GAMBLLY') { $updates['game_api_provider'] = 'GAMBLLY'; }
         if (!isset($current['api_token']) || $current['api_token'] === '') { $updates['api_token'] = $defaultKey; }
-        if (!isset($current['api_endpoint']) || stripos($current['api_endpoint'], 'game.gambllyapi.com') === false) { $updates['api_endpoint'] = $expectedEndpoint; }
+        if (!isset($current['api_endpoint']) || $current['api_endpoint'] !== $expectedEndpoint) { $updates['api_endpoint'] = $expectedEndpoint; }
         if (isset($current['gamblly_launch_url']) && $current['gamblly_launch_url'] !== '' && $current['gamblly_launch_url'] !== $expectedEndpoint) { $updates['gamblly_launch_url'] = $expectedEndpoint; }
         if (!isset($current['gamblly_amount_scale']) || $current['gamblly_amount_scale'] !== '6') {
             gamblly_auto_setup_widen_wallet($conn);
