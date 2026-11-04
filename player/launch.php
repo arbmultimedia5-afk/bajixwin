@@ -300,7 +300,7 @@ if (!$isGambllyProvider && !game_api_is_supported_launch_provider($game)) {
         'api_provider_name' => isset($game['api_provider_name']) ? $game['api_provider_name'] : '',
         'active_phase' => 'JILI,PGSOFT,SABA,UNITEDGAMING,JDB,TADAGAMING,CQ9,100HP,2J,BNG3OKS_ROW,5GGAMING,9WICKET,AMIGO,AOG,ASTAR,BGAMING,BIGTIMEGAMING,BTGAMING,EVOLUTIONLIVE,FACHAIGAMING,FASTSPIN,GAMEART,IDEAL,INOUT,LUCKSPORTGAMING,MICROGAMING,MINI,NETENT,ONGAMING,PRAGMATIC,SAGAMING,SBO,DPSPORTS,SEXY,T1,SPRIBE,TF,TFG,YEEBET'
     ));
-    show_launch_error('Provider Not Configured Yet', 'এখন provider-by-provider phase এ JILI, PGSoft, SABA Sports, United Gaming, JDB, TADAGaming, CQ9, 100HP, 2J, BNG3Oaks ROW, 5G Gaming, 9Wicket, Amigo, AOG, Astar এবং BGaming, BigTimeGaming, BTGaming এবং Evolution Live, FaChaiGaming, FastSpin, GameArt, IDEAL, INOUT, LuckSportGaming এবং Microgaming, Pragmatic এবং SBO/SBO VirtualSports/Sportsbook এবং DP Sports/DP Esports, Sexy/Sexy Video/T1/Spribe/TF/TFG/YEEBET, T1, Spribe, TF/TFG এবং YEEBET setup/test চলছে। দয়া করে এই providerগুলোর game দিয়ে test করুন।');
+    show_launch_error('Provider Not Configured Yet', 'এখন provider-by-provider phase এ JILI, PGSoft, SABA Sports, United Gaming, JDB, TADAGaming, CQ9, 100HP, 2J, BNG3Oaks ROW, 5G Gaming, 9Wicket, Amigo, AOG, Astar এবং BGaming, BigTimeGaming, BTGaming এবং Evolution Live, FaChaiGaming, FastSpin, GameArt, IDEAL, INOUT, LuckSportGaming এবং Microgaming, Pragmatic এবং SBO/SBO VirtualSports/Sportsbook এবং DP Sports/DP Esports, Sexy/Sexy Video/T1/Spribe/TF/TFG/YEEBET, T1, Spribe, TF/TFG এবং YEEBET setup/test চলছে। দয়া করে এই providerগুলোর game দিয়ে test করুন।');
 }
 
 $settings = (isset($__gambllyLaunchSettings) && is_array($__gambllyLaunchSettings)) ? $__gambllyLaunchSettings : game_api_get_settings($conn);
@@ -639,8 +639,78 @@ if ($isGambllyProvider) {
         $launchMessage = isset($gambllyLaunch['message']) && $gambllyLaunch['message'] !== '' ? $gambllyLaunch['message'] : 'Gamblly game launch URL was not returned.';
         show_launch_error('Game Launch Failed', $launchMessage);
     }
-    $launchUrl = $gambllyLaunch['url'];
-    echo "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Launching Game</title></head><body style='margin:0;background:#111;color:#fff;font-family:sans-serif;text-align:center;padding-top:40px;'><p>Launching game...</p><script>window.top.location.href = " . json_encode($launchUrl, JSON_UNESCAPED_SLASHES) . ";</script><a style='color:#00f3ff' href='" . htmlspecialchars($launchUrl, ENT_QUOTES, 'UTF-8') . "'>Open Game</a></body></html>";
+    $launchUrl = str_replace(array("\r", "\n"), '', $gambllyLaunch['url']);
+    $gambllyConfig = gamblly_api_get_config($conn, $settings);
+    $gambllyOpenMode = isset($gambllyConfig['open_mode']) ? $gambllyConfig['open_mode'] : 'iframe';
+    $jsonLaunchUrl = json_encode($launchUrl, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    $safeLaunchUrl = htmlspecialchars($launchUrl, ENT_QUOTES, 'UTF-8');
+    $safeLobbyUrl = htmlspecialchars($returnUrl, ENT_QUOTES, 'UTF-8');
+    $safeGameTitle = htmlspecialchars(isset($game['name']) ? $game['name'] : 'Game', ENT_QUOTES, 'UTF-8');
+    while (ob_get_level() > 0) { @ob_end_clean(); }
+    if (!headers_sent()) {
+        header('Content-Type: text/html; charset=utf-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+    }
+
+    if ($gambllyOpenMode === 'redirect') {
+        echo "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Opening Game</title></head>"
+           . "<body style='margin:0;background:#111;color:#fff;font-family:sans-serif;text-align:center;padding-top:40px;'><p>Opening game...</p>"
+           . "<script>try{window.top.location.href=" . $jsonLaunchUrl . ";}catch(e){window.location.href=" . $jsonLaunchUrl . ";}</script>"
+           . "<a style='color:#00f3ff' target='_top' href='" . $safeLaunchUrl . "'>Open Game</a></body></html>";
+        exit;
+    }
+    ?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Playing - <?php echo $safeGameTitle; ?></title>
+    <style>
+        html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
+        #gameFrame { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: #000; }
+        .gb-bar { position: fixed; top: 8px; left: 8px; z-index: 10; display: flex; gap: 6px; }
+        .gb-btn { background: rgba(0,0,0,.55); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 18px;
+                  padding: 6px 12px; font-size: 13px; text-decoration: none; line-height: 1; }
+        #gbLoading { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center;
+                     justify-content: center; color: #fff; background: #000; gap: 14px; text-align: center; padding: 16px; }
+        #gbLoading .gb-open { background: #00c2d1; color: #000; font-weight: bold; padding: 12px 22px; border-radius: 24px; text-decoration: none; display: none; }
+    </style>
+</head>
+<body>
+    <div id="gbLoading">
+        <div>Loading game...</div>
+        <a class="gb-open" id="gbOpen" href="<?php echo $safeLaunchUrl; ?>" target="_top" rel="noopener">Open Game</a>
+        <small id="gbHint" style="display:none;color:#aaa;max-width:320px">If the game does not appear, tap “Open Game”.</small>
+    </div>
+    <iframe id="gameFrame" src="<?php echo $safeLaunchUrl; ?>"
+            allow="autoplay; fullscreen; clipboard-write; encrypted-media; accelerometer; gyroscope; web-share"
+            allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    <div class="gb-bar">
+        <a class="gb-btn" href="<?php echo $safeLobbyUrl; ?>" target="_top">&larr; Lobby</a>
+        <a class="gb-btn" href="<?php echo $safeLaunchUrl; ?>" target="_top" rel="noopener">Open Game &#8599;</a>
+    </div>
+    <script>
+    (function () {
+        var frame = document.getElementById('gameFrame');
+        var loading = document.getElementById('gbLoading');
+        var shown = false;
+        function showFallback() {
+            if (shown) { return; }
+            shown = true;
+            document.getElementById('gbOpen').style.display = 'inline-block';
+            document.getElementById('gbHint').style.display = 'block';
+        }
+        frame.addEventListener('load', function () { loading.style.display = 'none'; });
+        // A provider that blocks iframes (X-Frame-Options / CSP) never shows the game:
+        // keep an "Open Game" button available so the player can always continue.
+        setTimeout(showFallback, 6000);
+    })();
+    </script>
+</body>
+</html>
+<?php
     exit;
 }
 
