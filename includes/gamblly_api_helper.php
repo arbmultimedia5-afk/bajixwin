@@ -13,8 +13,8 @@ if (!function_exists('gamblly_api_default_config')) {
             'withdraw_url' => 'https://game.gambllyapi.com/production/v1/getWithdraw.php',
             'balance_url' => 'https://game.gambllyapi.com/production/v1/getBalance.php',
             'callback_pull_url' => 'https://game.gambllyapi.com/production/v1/callback.php',
-            'callback_url' => 'https://bajixwin.com/api/game/callback.php',
-            'api_key' => 'ee761aea015CodeHub94fbe22b19aa61',
+            'callback_url' => 'https://jb66.net/api/game/callback',
+            'api_key' => '07d92b12ebaCodeHub944d2237b6af09',
             'member_prefix' => '',
             'member_suffix' => '',
             'currency' => 'BDT',
@@ -46,7 +46,10 @@ if (!function_exists('gamblly_api_get_config')) {
         $defaults = gamblly_api_default_config();
 
         $endpoint = gamblly_api_get_setting_value($settings, array('gamblly_launch_url', 'api_endpoint'), $defaults['launch_url']);
-        if ($endpoint === '' || (stripos($endpoint, 'gambllyapi.com') === false && stripos($endpoint, 'gamblly-api.com') === false)) {
+        // Only the official host is valid. "gamblly-api.com" does not resolve (DNS error
+        // "Could not resolve host"), and V1 launch must hit /v1/gameLaunch.php.
+        $endpointHost = strtolower((string)parse_url($endpoint, PHP_URL_HOST));
+        if ($endpointHost !== 'game.gambllyapi.com' || stripos($endpoint, '/v1/gameLaunch.php') === false) {
             $endpoint = $defaults['launch_url'];
         }
 
@@ -69,8 +72,26 @@ if (!function_exists('gamblly_api_get_config')) {
             'currency' => strtoupper(gamblly_api_get_setting_value($settings, 'currency_code', $defaults['currency'])),
             'language' => strtolower(gamblly_api_get_setting_value($settings, 'gamblly_language', $defaults['language'])),
             'platform' => gamblly_api_get_setting_value($settings, 'gamblly_platform', $defaults['platform']),
-            'zero_local_on_launch' => gamblly_api_get_setting_value($settings, 'gamblly_zero_local_on_launch', $defaults['zero_local_on_launch'])
+            'zero_local_on_launch' => gamblly_api_get_setting_value($settings, 'gamblly_zero_local_on_launch', $defaults['zero_local_on_launch']),
+            'home_url' => gamblly_api_home_url($settings),
+            // iframe = play inside the site; redirect = open the game full page.
+            'open_mode' => strtolower(gamblly_api_get_setting_value($settings, 'gamblly_open_mode', 'iframe'))
         );
+    }
+}
+
+if (!function_exists('gamblly_api_home_url')) {
+    // home_url must match the lobby domain allowlisted in the Gamblly account (else code 10040).
+    // Admin can pin it with game_settings.gamblly_home_url, e.g. https://yourdomain.com
+    function gamblly_api_home_url($settings) {
+        $fixed = gamblly_api_get_setting_value($settings, 'gamblly_home_url', '');
+        if ($fixed !== '' && preg_match('#^https?://[^/\s]+#i', $fixed)) { return rtrim($fixed, '/'); }
+        $host = isset($_SERVER['HTTP_HOST']) ? strtolower(trim((string)$_SERVER['HTTP_HOST'])) : '';
+        $host = preg_replace('/[^a-z0-9\.\-:]/', '', $host);
+        if ($host === '') { return ''; }
+        $isLocal = (strpos($host, 'localhost') === 0 || strpos($host, '127.0.0.1') === 0);
+        // Live site is HTTPS; PHP behind Cloudflare/proxy often reports http, which breaks the domain match.
+        return ($isLocal ? 'http' : 'https') . '://' . $host;
     }
 }
 
@@ -252,6 +273,7 @@ if (!function_exists('gamblly_api_launch_game')) {
         if ($userId <= 0) { return array('success' => false, 'message' => 'Invalid player account.'); }
         if ($gameUid === '') { return array('success' => false, 'message' => 'Gamblly game UID is missing.'); }
         if (trim((string)$config['api_key']) === '') { return array('success' => false, 'message' => 'Gamblly API Key is missing.'); }
+        if ($config['home_url'] === '') { return array('success' => false, 'message' => 'Lobby home_url could not be determined. Set game_settings.gamblly_home_url.'); }
         if ($currency === '') { $currency = $config['currency']; }
 
         $transferId = 'GBL' . date('YmdHis') . $userId . mt_rand(1000, 9999);
@@ -261,7 +283,7 @@ if (!function_exists('gamblly_api_launch_game')) {
             'api_key' => $config['api_key'],
             'member_account' => gamblly_api_member_account($userId, $config),
             'game_uid' => $gameUid,
-            'home_url' => function_exists('game_api_site_url') ? rtrim(game_api_site_url('/'), '/') : '',
+            'home_url' => $config['home_url'],
             'credit_amount' => number_format((float)$walletBalance, 2, '.', ''),
             'currency_code' => strtoupper($currency),
             'language' => $config['language'],
@@ -309,6 +331,11 @@ if (!function_exists('gamblly_api_launch_game')) {
             );
             if (isset($knownCodes[$errorCode])) { $message = $knownCodes[$errorCode] . ' (code ' . $errorCode . ')'; }
         }
+        if (!$ok && !is_array($decoded) && isset($result['response']) && trim((string)$result['response']) !== '') {
+            $snippet = trim(preg_replace('/\s+/', ' ', strip_tags((string)$result['response'])));
+            $message = 'Unexpected response from Gamblly: ' . substr($snippet, 0, 160);
+        }
+        if (!$ok && is_array($decoded) && $launchUrl === '' && $status) { $message = 'Gamblly returned success but no game_url.'; }
         if (!$ok && isset($result['curl_error']) && $result['curl_error'] !== '') { $message = $result['curl_error']; }
         if (!$ok && isset($result['http_code']) && (int)$result['http_code'] > 0) { $message .= ' (HTTP ' . (int)$result['http_code'] . ')'; }
 
