@@ -55,6 +55,12 @@ function nekpay_ensure_schema($conn)
 
     @$conn->query("ALTER TABLE `transactions_fake` MODIFY `wallet_number` VARCHAR(191) DEFAULT NULL");
 
+    // NEKpay uses a separate key for payout (withdraw / transfer) signatures.
+    $col = @$conn->query("SHOW COLUMNS FROM `payment_gateway_settings` LIKE 'payout_secret_code'");
+    if ($col && $col->num_rows === 0) {
+        @$conn->query("ALTER TABLE `payment_gateway_settings` ADD COLUMN `payout_secret_code` VARCHAR(255) DEFAULT NULL AFTER `secret_code`");
+    }
+
     return true;
 }
 
@@ -64,17 +70,19 @@ function nekpay_get_settings($conn)
     $settings = array(
         'merchant_code' => '808258204',
         'secret_code' => '7c1adc2ec9f04bc0a00a1c0fd88eee00',
+        'payout_secret_code' => '',
         'api_base_url' => nekpay_default_api_base_url(),
         'is_enabled' => 1,
         'last_health_status' => '',
         'last_health_checked_at' => '',
         'last_error' => ''
     );
-    $res = @$conn->query("SELECT merchant_code, secret_code, api_base_url, is_enabled, last_health_status, last_health_checked_at, last_error FROM payment_gateway_settings WHERE provider='nekpay' LIMIT 1");
+    $res = @$conn->query("SELECT merchant_code, secret_code, payout_secret_code, api_base_url, is_enabled, last_health_status, last_health_checked_at, last_error FROM payment_gateway_settings WHERE provider='nekpay' LIMIT 1");
     if ($res && $res->num_rows > 0) {
         $row = $res->fetch_assoc();
         $settings['merchant_code'] = trim((string) ($row['merchant_code'] ?? '')) ?: '808258204';
         $settings['secret_code'] = trim((string) ($row['secret_code'] ?? '')) ?: '7c1adc2ec9f04bc0a00a1c0fd88eee00';
+        $settings['payout_secret_code'] = trim((string) ($row['payout_secret_code'] ?? ''));
         $settings['api_base_url'] = trim((string) ($row['api_base_url'] ?? '')) ?: nekpay_default_api_base_url();
         $settings['is_enabled'] = intval($row['is_enabled'] ?? 1);
         $settings['last_health_status'] = trim((string) ($row['last_health_status'] ?? ''));
@@ -84,7 +92,7 @@ function nekpay_get_settings($conn)
     return $settings;
 }
 
-function nekpay_save_settings($conn, $merchant_code, $secret_code, $api_base_url, $is_enabled)
+function nekpay_save_settings($conn, $merchant_code, $secret_code, $api_base_url, $is_enabled, $payout_secret_code = null)
 {
     nekpay_ensure_schema($conn);
     $provider = 'nekpay';
@@ -102,6 +110,16 @@ function nekpay_save_settings($conn, $merchant_code, $secret_code, $api_base_url
     $stmt->bind_param('ssssi', $provider, $merchant_code, $secret_code, $api_base_url, $is_enabled);
     $ok = $stmt->execute();
     $stmt->close();
+    if ($ok && $payout_secret_code !== null) {
+        $payout_secret_code = trim((string) $payout_secret_code);
+        $stmt = $conn->prepare("UPDATE payment_gateway_settings SET payout_secret_code=? WHERE provider='nekpay'");
+        if (!$stmt) {
+            return false;
+        }
+        $stmt->bind_param('s', $payout_secret_code);
+        $ok = $stmt->execute();
+        $stmt->close();
+    }
     return $ok;
 }
 
@@ -401,11 +419,12 @@ function nekpay_create_payout($conn, $merchantTransferId, $bankCode, $accountNum
     }
 
     $merchantId = $config['merchant_code'];
-    $payoutKey = $config['secret_code'];
+    // Payout must be signed with the payout (withdraw) key; the deposit key gives SIGN_VALIDATE_FAILED.
+    $payoutKey = $config['payout_secret_code'] !== '' ? $config['payout_secret_code'] : $config['secret_code'];
     $apiBase = rtrim($config['api_base_url'], '/');
 
     if (empty($merchantId) || empty($payoutKey)) {
-        return array('success' => false, 'message' => 'NEKpay Merchant ID or Secret Code is missing. Configure NEKpay in Admin Panel.');
+        return array('success' => false, 'message' => 'NEKpay Merchant ID or Payout Secret Key is missing. Configure NEKpay in Admin Panel.');
     }
 
     $holderName = preg_replace('/[^a-zA-Z ]/', '', $receiverName ?? '');
@@ -465,7 +484,7 @@ function nekpay_create_payout($conn, $merchantTransferId, $bankCode, $accountNum
         }
     }
 
-    $logEntry = '[' . date('Y-m-d H:i:s') . '] NEKPAY_PAYOUT_CALL endpoint=' . $endpoint . ' params=' . json_encode($params) . ' curlErr=' . $curlErr . ' rawResponse=' . $response . PHP_EOL;
+    $logEntry = '[' . date('Y-m-d H:i:s') . '] NEKPAY_PAYOUT_CALL endpoint=' . $endpoint . ' params=' . json_encode(array_diff_key($params, array('sign' => 1))) . ' curlErr=' . $curlErr . ' rawResponse=' . $response . PHP_EOL;
     @file_put_contents(__DIR__ . '/../api/game_api_debug.log', $logEntry, FILE_APPEND);
 
     if ($curlErr) {

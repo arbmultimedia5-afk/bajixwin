@@ -23,11 +23,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_gateway_settings
 
     $nekpay_merchant = sanitize($conn, $_POST['nekpay_merchant_code'] ?? '');
     $nekpay_secret = htmlspecialchars(strip_tags(trim($_POST['nekpay_secret_code'] ?? '')), ENT_QUOTES, 'UTF-8');
+    $nekpay_payout_secret = htmlspecialchars(strip_tags(trim($_POST['nekpay_payout_secret_code'] ?? '')), ENT_QUOTES, 'UTF-8');
     $nekpay_api_base = htmlspecialchars(strip_tags(trim($_POST['nekpay_api_base_url'] ?? nekpay_default_api_base_url())), ENT_QUOTES, 'UTF-8');
     $nekpay_enabled = isset($_POST['nekpay_is_enabled']) ? 1 : 0;
 
     $okLg = lgpay_save_settings($conn, $lgpay_merchant, $lgpay_secret, $lgpay_api_base, $lgpay_enabled);
-    $okNek = nekpay_save_settings($conn, $nekpay_merchant, $nekpay_secret, $nekpay_api_base, $nekpay_enabled);
+    $okNek = nekpay_save_settings($conn, $nekpay_merchant, $nekpay_secret, $nekpay_api_base, $nekpay_enabled, $nekpay_payout_secret);
 
     if ($okLg && $okNek) {
         $msg = 'Payment Gateway settings updated successfully!';
@@ -106,6 +107,15 @@ $nekpay = nekpay_get_settings($conn);
                                 value="<?php echo htmlspecialchars($nekpay['secret_code'] ?? '7c1adc2ec9f04bc0a00a1c0fd88eee00', ENT_QUOTES, 'UTF-8'); ?>"
                                 placeholder="7c1adc2ec9f04bc0a00a1c0fd88eee00"
                                 class="w-full border border-gray-300 rounded-xl px-4 py-3 font-bold focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">Payout
+                                (Withdraw) Secret Key</label>
+                            <input type="text" name="nekpay_payout_secret_code"
+                                value="<?php echo htmlspecialchars($nekpay['payout_secret_code'] ?? '', ENT_QUOTES, 'UTF-8'); ?>"
+                                placeholder="NEKpay payout / transfer key"
+                                class="w-full border border-gray-300 rounded-xl px-4 py-3 font-bold focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                            <p class="mt-1 text-[11px] text-gray-400">Withdraw requests are signed with this key. Empty = use the Payment Key above.</p>
                         </div>
                         <div class="md:col-span-2">
                             <label class="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">API
