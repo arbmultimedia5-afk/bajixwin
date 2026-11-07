@@ -433,7 +433,14 @@ function nekpay_create_payout($conn, $merchantTransferId, $bankCode, $accountNum
     }
 
     $backUrl = nekpay_url('/api/nekpay_payout_callback.php');
-    $formattedAmount = number_format((float) $amount, 2, '.', '');
+    // NEKpay Bangladesh payouts accept whole taka only ("500", not "500.00"),
+    // otherwise it answers "Bangladesh payment amount format error".
+    // Never round money silently: a fractional amount is rejected instead.
+    $amountValue = (float) $amount;
+    if ($amountValue <= 0 || abs($amountValue - round($amountValue)) > 0.000001) {
+        return array('success' => false, 'message' => 'NEKpay payout amount must be a whole taka amount (no paisa). Requested: ' . $amount);
+    }
+    $formattedAmount = (string) (int) round($amountValue);
 
     $params = array(
         'apply_date' => date('Y-m-d H:i:s'),
